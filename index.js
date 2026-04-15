@@ -3,7 +3,7 @@ const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-// API KEY MỚI CỦA BẠN
+// API KEY MỚI CỦA BẠN ĐÂY NHÉ HEHEHEHEHEHEHEHEHH
 const GEMINI_KEY = "AIzaSyCjE11tNs3HBmWdH3tm1WS6ZbeVr5LxoTM";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
 
