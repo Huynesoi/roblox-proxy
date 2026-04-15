@@ -1,29 +1,42 @@
 const express = require('express');
-const axios = require('axios');
 const app = express();
 app.use(express.json());
 
-// API KEY của bạn
-const MY_KEY = "AIzaSyCjE11tNs3HBmWdH3tm1WS6ZbeVr5LxoTM";
+// Nơi lưu trữ tin nhắn tạm thời
+let chatHistory = [];
 
-app.post('/ask', async (req, res) => {
-    try {
-        const userText = req.body.text;
-        // ĐÃ SỬA: Thay v1beta bằng v1 để khớp với model 1.5-flash
-        const googleUrl = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=" + MY_KEY;
-
-        const response = await axios.post(googleUrl, {
-            contents: [{ parts: [{ text: userText }] }]
-        });
-
-        const aiAnswer = response.data.candidates[0].content.parts[0].text;
-        res.json({ answer: aiAnswer });
-
-    } catch (err) {
-        const errorDetail = err.response ? JSON.stringify(err.response.data) : err.message;
-        console.error("LOI_CUA_GOOGLE:", errorDetail);
-        res.status(500).json({ error: "Loi Google Roi!", details: errorDetail });
+// API 1: Nhận tin nhắn từ người chơi và lưu lại
+app.post('/send', (req, res) => {
+    const { player, message } = req.body;
+    
+    if (player && message) {
+        // Tạo tin nhắn mới kèm thời gian
+        const newMsg = {
+            player: player,
+            message: message,
+            time: Date.now()
+        };
+        
+        chatHistory.push(newMsg);
+        
+        // Chỉ giữ lại 50 tin nhắn gần nhất để server không bị lag
+        if (chatHistory.length > 50) {
+            chatHistory.shift(); 
+        }
+        
+        res.json({ success: true });
+    } else {
+        res.status(400).json({ success: false, error: "Thiếu nội dung" });
     }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Server Live"));
+// API 2: Trả về danh sách tin nhắn cho các người chơi khác xem
+app.get('/chat', (req, res) => {
+    res.json(chatHistory);
+});
+
+// Khởi động server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log("Global Chat Server da san sang!");
+});
