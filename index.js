@@ -1,77 +1,133 @@
-const express = require('express');
+const express = require("express");
+
 const app = express();
 app.use(express.json());
 
-// Lưu trữ dữ liệu trong bộ nhớ (Ram)
-let onlinePlayers = {}; // Lưu thông tin người dùng
-let chatHistory = [];   // Lưu lịch sử chat
-let adminQueues = {};   // Lưu lệnh admin chờ thực hiện (Backdoor)
+const PORT = process.env.PORT || 3000;
 
-app.post('/sync', (req, res) => {
-    const data = req.body;
-    const now = Date.now();
+// In-memory store
+const players = new Map();   // userId -> player record
+const messages = [];         // chat log
 
-    // 1. Kiểm tra dữ liệu đầu vào (Phải khớp với Script Roblox)
-    if (!data.UserId) {
-        return res.status(400).json({ error: "Missing UserId" });
-    }
+function now() {
+  return Date.now();
+}
 
-    // 2. Cập nhật danh sách Online
-    onlinePlayers[data.UserId] = {
-        UserId: data.UserId,
-        Username: data.Username || "Unknown",
-        DisplayName: data.DisplayName || "Guest",
-        PlaceId: data.PlaceId,
-        JobId: data.JobId,
-        LastSeen: now
-    };
+function makeId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
 
-    // 3. Xử lý tin nhắn Chat (Nếu có)
-    if (data.Message && data.Message !== "") {
-        chatHistory.push({
-            Sender: data.DisplayName,
-            Content: data.Message,
-            Time: now
-        });
-        // Giữ tối đa 50 tin nhắn để tránh nặng server
-        if (chatHistory.length > 50) chatHistory.shift();
-    }
+function pushLimited(arr, item, limit = 200) {
+  arr.push(item);
+  while (arr.length > limit) arr.shift();
+}
 
-    // 4. Xử lý lệnh Admin (Nếu người gửi là Admin)
-    // AdminCommand: { TargetId: 123, Action: "Flashbang", Reason: "..." }
-    if (data.AdminCommand && data.AdminCommand.TargetId) {
-        const target = data.AdminCommand.TargetId;
-        if (!adminQueues[target]) adminQueues[target] = [];
-        
-        adminQueues[target].push({
-            Action: data.AdminCommand.Action,
-            Reason: data.AdminCommand.Reason || "No reason"
-        });
-    }
-
-    // 5. Dọn dẹp người chơi offline (Sau 60s không sync)
-    for (let id in onlinePlayers) {
-        if (now - onlinePlayers[id].LastSeen > 60000) {
-            delete onlinePlayers[id];
-            delete adminQueues[id]; // Xóa luôn hàng đợi lệnh của người đó
-        }
-    }
-
-    // 6. Phản hồi về cho Roblox Script
-    res.json({
-        OnlinePlayers: Object.values(onlinePlayers), // Trả về mảng danh sách người chơi
-        ChatData: chatHistory,
-        PendingCommands: adminQueues[data.UserId] || [] // Trả về lệnh dành riêng cho UserId này
-    });
-
-    // Sau khi gửi lệnh đi thì xóa hàng đợi của người đó để không bị lặp lại
-    if (adminQueues[data.UserId]) {
-        delete adminQueues[data.UserId];
-    }
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "roblox-global-chat-bridge" });
 });
 
-const PORT = process.env.PORT || 3000;
+app.post("/register", (req, res) => {
+  const {
+    userId,
+    name,
+    displayName,
+    avatarUrl,
+    placeId,
+    jobId,
+    gameName,
+    anonymous = false,
+    hideInfo = false,
+  } = req.body || {};
+
+  if (!userId || !name) {
+    return res.status(400).json({ ok: false, error: "missing userId/name" });
+  }
+
+  const record = {
+    userId: Number(userId),
+    name: String(name),
+    displayName: String(displayName || name),
+    avatarUrl: String(avatarUrl || ""),
+    placeId: Number(placeId || 0),
+    jobId: String(jobId || ""),
+    gameName: String(gameName || ""),
+    anonymous: !!anonymous,
+    hideInfo: !!hideInfo,
+    updatedAt: now(),
+  };
+
+  players.set(String(userId), record);
+  return res.json({ ok: true, player: record });
+});
+
+app.post("/unregister", (req, res) => {
+  const { userId } = req.body || {};
+  if (!userId) return res.status(400).json({ ok: false, error: "missing userId" });
+  players.delete(String(userId));
+  return res.json({ ok: true });
+});
+
+app.get("/players", (req, res) => {
+  const list = Array.from(players.values()).sort((a, b) => a.userId - b.userId);
+  res.json({ ok: true, players: list });
+});
+
+app.post("/chat", (req, res) => {
+  const {
+    userId,
+    name,
+    displayName,
+    avatarUrl,
+    message,
+    anonymous = false,
+    hideInfo = false,
+    placeId,
+    jobId,
+    gameName,
+  } = req.body || {};
+
+  const clean = String(message || "").trim();
+  if (!clean) {
+    return res.status(400).json({ ok: false, error: "empty message" });
+  }
+
+  const sender = anonymous ? "Anonymous" : String(displayName || name || "Unknown");
+
+  const msg = {
+    id: makeId(),
+    timestamp: now(),
+    userId: Number(userId || 0),
+    name: String(name || ""),
+    displayName: String(displayName || name || "Unknown"),
+    avatarUrl: String(avatarUrl || ""),
+    sender,
+    message: clean,
+    anonymous: !!anonymous,
+    hideInfo: !!hideInfo,
+    placeId: Number(placeId || 0),
+    jobId: String(jobId || ""),
+    gameName: String(gameName || ""),
+  };
+
+  pushLimited(messages, msg, 200);
+  res.json({ ok: true, message: msg });
+});
+
+app.get("/messages", (req, res) => {
+  const since = Number(req.query.since || 0);
+  const list = messages.filter(m => m.timestamp > since);
+  res.json({ ok: true, messages: list });
+});
+
+app.get("/snapshot", (req, res) => {
+  res.json({
+    ok: true,
+    messages,
+    players: Array.from(players.values()).sort((a, b) => a.userId - b.userId),
+    serverTime: now(),
+  });
+});
+
 app.listen(PORT, () => {
-    console.log(`--- Server Global V8 đang chạy tại cổng ${PORT} ---`);
-    console.log(`--- Sẵn sàng nhận dữ liệu từ Roblox ---`);
+  console.log(`Bridge running on port ${PORT}`);
 });
